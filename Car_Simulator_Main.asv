@@ -1,0 +1,30 @@
+clear all; clc; close all;
+
+figure(1)
+axis equal
+numCars = 1;
+
+testCar = Car;
+
+% for i = 1:numCars
+%     highway.introduce();
+% end
+dt = .1;
+velArr = testCar.vel(2);
+tArr = 0;
+desiredSpeed = testCar.getDesiredSpeed;
+
+while 1
+    figure(1)
+    testCar.update(dt);
+    drawnow
+    
+    figure(2)
+    clf
+    velArr = [velArr, testCar.vel(2)];
+    tArr = [tArr, tArr(end) + dt];
+    plot(tArr, velArr); 
+    hold on
+    plot(tArr, 
+    
+end
