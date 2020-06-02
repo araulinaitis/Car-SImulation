@@ -15,6 +15,7 @@ classdef Car < handle
         maxXAccel = 0.981;
         desiredXAccel = .981;
         desiredSpeed
+        desiredHeadway
         p
         sys
         kI
@@ -22,18 +23,21 @@ classdef Car < handle
         kD
         uCap
         lastU = [0, 0];
-        deltaUCap = [3, 1];
+        deltaUCap = [0, 0];
         errSum = [0, 0; 0, 0; 0, 0; 0, 0]
         lastErr = 0
-        integralWindow = [0.25; 0; 0; 2.5] % [x, x-dot, y, y-dot]
+        integralWindow = [0.25; 0; 3; 2.5] % [x, x-dot, y, y-dot]
         targetState = [0; 0; 0; 0]
+        controlMask = [1, 0, 0, 1]
+        err = [0, 0; 0, 0; 0, 0; 0, 0];
+        headwayWindow
     end
     
     methods
         function obj = Car()
             
             % Vehicle State: [x, x-dot, y, y-dot]'
-            obj.curState = [0; 0; 0; 0];
+            obj.curState = [0; 0; 0; 35]; % start car at 35 m/s
             
             obj.m = 10 + 10 * rand;
             obj.l = 3 + 3 * rand;
@@ -42,7 +46,9 @@ classdef Car < handle
             obj.state = 0;
             obj.acc = [0, 0];
             
-            obj.desiredSpeed = [0, 20 + 20 * rand];
+            obj.desiredSpeed = [0, 35];
+            obj.desiredHeadway = 2;
+            obj.headwayWindow = obj.desiredSpeed(2) * obj.desiredHeadway * 1.01;
             
             xArr = obj.curState(1) + (obj.w / 2) * [1; 1; -1; -1];
             yArr = obj.curState(3) + (obj.l / 2) * [1; -1; -1; 1];
@@ -70,11 +76,11 @@ classdef Car < handle
             obj.sys = ss(A, B, C, D);
             
             obj.kP = [8, 0,...
-                0, 8];
+                32, 8];
             obj.kI = [0, 0,...
-                0, 0.5];
+                0.5, 0.5];
             obj.kD = [17, 0,...
-                0, 10];
+                0.25, 10];
             
             obj.uCap = [obj.m * obj.desiredXAccel, obj.m * obj.desiredYAccel];
             obj.deltaUCap(1) = 0.981 * obj.m; % https://www.hindawi.com/journals/mpe/2014/478573/
@@ -84,19 +90,20 @@ classdef Car < handle
         
         function doPhysics(obj, dt)
             
+            
             err = obj.targetState - obj.curState;
+            obj.err = err;
             err = [[err(1); err(2); 0; 0], [0; 0; err(3); err(4)]];
             errDer = (err - obj.lastErr) / dt;
             
+            colSeq = [1, 1, 2, 2];
             for i = 1:4
-                if abs(err(i, ceil(i / 2))) < obj.integralWindow(i) % ceil(i / 2) makes it so the column sequence is 1-1-2-2;
-                    obj.errSum(i, ceil(i / 2)) = obj.errSum(i, ceil(i / 2)) + err(i, ceil(i / 2));
-                end
+                obj.errSum(i, colSeq(i)) = (obj.errSum(i, colSeq(i)) + err(i, colSeq(i))) * double(abs(err(i, colSeq(i))) < obj.integralWindow(i)); % add to the sum if the error is less than the window value (boolean 1) and reset the sum to 0 if the value is outside the window (boolean 0)
             end
             
             obj.lastErr = err;
             
-            u = obj.kP * err + obj.kI * obj.errSum + obj.kD * errDer; % u will be 1x2 [ux, uy]
+            u = (obj.controlMask .* obj.kP) * err + (obj.controlMask .* obj.kI) * obj.errSum + (obj.controlMask .* obj.kD) * errDer; % u will be 1x2 [ux, uy]
             
             % lazy low-pass filter u
             deltaU = u - obj.lastU;
@@ -111,7 +118,7 @@ classdef Car < handle
             
             obj.lastU = u;
             
-            numSteps = 10;
+            numSteps = 20;
             t = linspace(0, dt, numSteps)';
             y = lsim(obj.sys, u .* ones(numSteps, 1), t, obj.curState');
             
@@ -128,10 +135,37 @@ classdef Car < handle
         function update(obj, dt)
             
             % hard-code changes for testing
-            obj.targetState(4) = obj.desiredSpeed(2);
-            obj.targetState(1) = 3.7;
+            % obj.targetState(4) = obj.desiredSpeed(2);
+            % obj.targetState(1) = 3.7;
+            
+            global t
+            t = t + dt;
+            
+            dummySpeed = 30;
+            dummyCarBack = dummySpeed * t + 100; % start 100m ahead, 30 m/s speed
+            gap = dummyCarBack - obj.curState(3) + (obj.l / 2);
+            
+            if gap < obj.headwayWindow
+                % use position of car in front and current speed and desired headway to
+                % determine desired y-pos
+                headwayDist = obj.desiredHeadway * obj.curState(4);
+                obj.targetState(3) = obj.curState(3) + gap - headwayDist - (obj.l / 2);
+                obj.targetState(4) = dummySpeed;
+%                 obj.controlMask(4) = 0;
+                obj.controlMask(3) = 1;
+            else
+                obj.targetState(3) = obj.curState(3);
+                obj.targetState(4) = obj.desiredSpeed(2);
+                obj.controlMask(3) = 0;
+                obj.controlMask(4) = 1;
+            end
+            
             
             obj.doPhysics(dt);
+        end
+        
+        function out = getError(obj)
+            out = obj.err;
         end
         
         function out = getDesiredSpeed(obj)
